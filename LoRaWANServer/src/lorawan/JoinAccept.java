@@ -3,7 +3,6 @@ package lorawan;
 public class JoinAccept 
 {
     private byte[] appNonce;
-    private byte[] netId;
     private byte[] devAddr; 
     private byte[] RFU;
     private byte[] mic;
@@ -11,7 +10,6 @@ public class JoinAccept
     public JoinAccept()
     {
     	appNonce = new byte[3];
-        netId = new byte[3];
         devAddr = new byte[4]; 
         RFU = new byte[2];
         mic = new byte[4];
@@ -23,12 +21,7 @@ public class JoinAccept
 	public void setAppNonce(byte[] appNonce) {
 		this.appNonce = appNonce;
 	}
-	public byte[] getNetId() {
-		return this.netId;
-	}
-	public void setNetId(byte[] netId) {
-		this.netId = netId;
-	}
+
 	public byte[] getDevAddr() {
 		return this.devAddr;
 	}

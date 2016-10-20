@@ -1,21 +1,21 @@
 package lorawan;
 
 public class JoinRequest {
-	private byte[] appEUI = new byte[8];
-	private byte[] devEUI = new byte[8];
+	private byte[] appeui = new byte[8];
+	private byte[] deveui = new byte[8];
 	private byte[] devNonce = new byte[2];
 	
-	public byte[] getAppEUI() {
-		return appEUI;
+	public byte[] getAppeui() {
+		return appeui;
 	}
-	public void setAppEUI(byte[] appEUI) {
-		this.appEUI = appEUI;
+	public void setAppeui(byte[] appeui) {
+		this.appeui = appeui;
 	}
-	public byte[] getDevEUI() {
-		return devEUI;
+	public byte[] getDeveui() {
+		return deveui;
 	}
-	public void setDevEUI(byte[] devEUI) {
-		this.devEUI = devEUI;
+	public void setDeveui(byte[] deveui) {
+		this.deveui = deveui;
 	}
 	public byte[] getDevNonce() {
 		return devNonce;

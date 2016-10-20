@@ -2,9 +2,12 @@ package lorawan;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.security.Key;
@@ -19,6 +22,13 @@ import javax.crypto.spec.SecretKeySpec;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import dao.Session;
+import dao.Upstream;
+
+import org.hibernate.SessionFactory;
+import org.hibernate.cfg.Configuration;
+import org.hibernate.criterion.Restrictions;
+
 public class GWMP
 {
 	private DatagramSocket serverSocket;
@@ -28,6 +38,7 @@ public class GWMP
 	
 	public static final byte version = 0x01;
 	public static final byte[] token = new byte[]{0x00, 0x00};
+	public static final byte[] netId = new byte[]{0x03, 0x02, 0x01};
 	
 	public static final byte PUSH_DATA = 0x00;
     public static final byte PULL_DATA = 0x02;
@@ -41,6 +52,16 @@ public class GWMP
 	
 	JoinRequest joinRequest;
 	JoinAccept joinAccept;
+	Session session;
+	org.hibernate.Session hSession;
+	Configuration cfg;
+	
+	byte[] dsDevAddr;
+	byte[] dsData;
+	
+	byte[] joinGweui;
+
+	String state = "ack";
 	
 	public GWMP()
 	{	
@@ -63,6 +84,10 @@ public class GWMP
 		
 		joinRequest = new JoinRequest();
 		joinAccept = new JoinAccept();
+		session = null;
+		
+		cfg = new Configuration();
+		cfg.configure("Hibernate.cfg.xml");
 	}
 	
 	public Runnable tunnel = new Runnable()
@@ -86,7 +111,6 @@ public class GWMP
 	                
 	                queue.add(gw);
 	                
-	                //test for downstream
 	                gateway.IPAddress = gw.IPAddress;
 	                gateway.port = gw.port;
 	        	}
@@ -138,15 +162,13 @@ public class GWMP
         }
 	};
 	
-	String state = "ack";
-	
 	public Runnable user = new Runnable()
 	{
 		public void run()
 		{
 	        for(;;)
             {
-	        	BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+	        	/*BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
 	            System.out.println("Enter x to transmit");
 	            System.out.println();
 	            String s = null;
@@ -164,7 +186,66 @@ public class GWMP
 	        		System.out.println("Sending...");
 	        		state = "data";
 
-	        	}
+	        	}*/
+	        	
+	        	BufferedReader is;
+	            PrintWriter os;
+	            Socket socket = null;
+
+	            try
+	            {
+	            	ServerSocket httpServerSocket = new ServerSocket(8888);
+					socket = httpServerSocket.accept();
+
+	                is = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+
+	                String request = is.readLine();
+	                
+	                String strDeveui = request.substring(request.indexOf("deveui") + 7, request.indexOf("deveui") + 7 + 16);
+	                String strData = request.substring(request.indexOf("data") + 5, request.indexOf("data") + 5 + 14);
+	             
+	                System.out.println(strDeveui);
+	                System.out.println(strData);
+	                
+	                byte[] deveui = javax.xml.bind.DatatypeConverter.parseHexBinary(strDeveui);
+	                byte[] data = javax.xml.bind.DatatypeConverter.parseHexBinary(strData);
+	                
+	                @SuppressWarnings("deprecation")
+		    		SessionFactory sf = cfg.buildSessionFactory();
+		        	hSession = sf.openSession();	    		
+					hSession.beginTransaction();
+					
+					session = (Session)hSession.createCriteria(Session.class).add(Restrictions.eq("deveui", deveui)).uniqueResult();
+					dsDevAddr = session.getDevAddr();
+					
+		        	hSession.flush();
+		        	hSession.close();
+		        	
+		        	dsData = data;
+		        	
+		        	System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(dsDevAddr));
+	    			System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(dsData));
+	                
+	                state = "data";
+		        	
+	                String response = "Sent....";
+
+	                os = new PrintWriter(socket.getOutputStream(), true);
+
+	                os.print("HTTP/1.1 200 OK" + "\r\n");
+	                os.print("Content-Length: " + response.length() + "\r\n");
+	                os.print("Content-Type: text/plain" + "\r\n\r\n");
+
+	                os.print(response + "\r\n");
+	                os.flush();
+	                socket.close();
+	                httpServerSocket.close();
+	            }
+	            catch (Exception e) 
+	            {
+	            	e.printStackTrace();
+	            }
+
             }
         }
 	};
@@ -210,17 +291,18 @@ public class GWMP
 		        ByteBuffer tmp0, tmp1; 
 		        
     			new Random().nextBytes(joinAccept.getAppNonce());
-    			joinAccept.setNetId(new byte[]{0x03, 0x02, 0x01});
-    			joinAccept.setDevAddr(new byte[]{0x17, 0x77, (byte)0x96, 0x06});
+    			byte[] deveui = joinRequest.getDeveui();
+    			joinAccept.setDevAddr(new byte[]{deveui[0], deveui[1], deveui[2], deveui[3]});
+    			//joinAccept.setDevAddr(new byte[]{0x17, 0x77, (byte)0x96, 0x06});//possibly use 4 LSB from deveui
     			joinAccept.setRFU(new byte[]{0x00, 0x00});
     			
     			System.out.println("AppNonce: " + javax.xml.bind.DatatypeConverter.printHexBinary(joinAccept.getAppNonce()));
-    			System.out.println("NetId: " + javax.xml.bind.DatatypeConverter.printHexBinary(joinAccept.getNetId()));
+    			System.out.println("NetId: " + javax.xml.bind.DatatypeConverter.printHexBinary(netId));
     			System.out.println("DevAddr: " + javax.xml.bind.DatatypeConverter.printHexBinary(joinAccept.getDevAddr()));
 	
 		        
 				dataUnencrypted.put(joinAccept.getAppNonce());
-				dataUnencrypted.put(joinAccept.getNetId());
+				dataUnencrypted.put(netId);
 				dataUnencrypted.put(joinAccept.getDevAddr());
 				dataUnencrypted.put(joinAccept.getRFU());
 				
@@ -276,7 +358,24 @@ public class GWMP
 	        	{
 	        		e.printStackTrace();
 	        	}
-	    	
+	    	        	
+	        	@SuppressWarnings("deprecation")
+	    		SessionFactory sf = cfg.buildSessionFactory();
+	        	hSession = sf.openSession();	    		
+				hSession.beginTransaction();
+				
+				session = (Session)hSession.createCriteria(Session.class).add(Restrictions.eq("deveui", new byte[]{deveui[7], deveui[6], deveui[5], deveui[4], deveui[3], deveui[2] , deveui[1], deveui[0]})).uniqueResult();
+				session.setDevAddr(joinAccept.getDevAddr());
+				session.setDevNonce(joinRequest.getDevNonce());
+	        	session.setAppNonce(joinAccept.getAppNonce());
+	        	session.setGweui(joinGweui);
+	        	
+	        	hSession.save(session);
+	        	hSession.flush();
+	        	hSession.getTransaction().commit();
+	        	hSession.close();
+	        
+	        	
 	        	state = "ack";
 				break;
 			
@@ -288,8 +387,10 @@ public class GWMP
 				
 		        ByteBuffer d = ByteBuffer.allocate(12);
 		        d.put((byte)0x00);
-		        d.put(joinAccept.getDevAddr());
-		        d.put(new byte[]{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11});
+		        //d.put(joinAccept.getDevAddr());
+		        d.put(dsDevAddr);
+		        //d.put(new byte[]{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11});
+		        d.put(dsData);
 		        data = Base64.getEncoder().encodeToString(d.array());
 				
 		        //txpk.setTmst(rxpk.getTmst() + 5000000);
@@ -301,7 +402,8 @@ public class GWMP
 		        txpk.setIpol(true);
 		        txpk.setPowe(14);
 		        txpk.setImme(true);
-		        txpk.setSize(12);
+		        //txpk.setSize(12);
+		        txpk.setSize(5 + dsData.length);
 		        txpk.setData(data);    
 		         
 		        t = txpk.toJSON();
@@ -339,6 +441,7 @@ public class GWMP
 		String tempStr;
 		
 		System.arraycopy( gw.data, 4, gw.EUI, 0, 8);
+		System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(gw.EUI));
 		
 		System.arraycopy( gw.data, 12, temp, 0, gw.data.length - 12);
 		tempStr = (new String(temp));
@@ -353,15 +456,23 @@ public class GWMP
 				
 				if(data[0] == PHYPayload.MHDR.MType.JOIN_REQUEST)
 				{		
-					System.arraycopy(data, 1, joinRequest.getAppEUI(), 0, 8);
-					System.arraycopy(data, 9, joinRequest.getDevEUI(), 0, 8);
+					System.arraycopy(data, 1, joinRequest.getAppeui(), 0, 8);
+					System.arraycopy(data, 9, joinRequest.getDeveui(), 0, 8);
 					System.arraycopy(data, 17, joinRequest.getDevNonce(), 0, 2);
 					
-					System.out.println("AppEUI: " + javax.xml.bind.DatatypeConverter.printHexBinary(joinRequest.getAppEUI()));
-					System.out.println("DevEUI: " + javax.xml.bind.DatatypeConverter.printHexBinary(joinRequest.getDevEUI()));
+					System.out.println("AppEUI: " + javax.xml.bind.DatatypeConverter.printHexBinary(joinRequest.getAppeui()));
+					System.out.println("DevEUI: " + javax.xml.bind.DatatypeConverter.printHexBinary(joinRequest.getDeveui()));
 					System.out.println("DevNonce: " + javax.xml.bind.DatatypeConverter.printHexBinary(joinRequest.getDevNonce()));
-					
-					state = "join";
+									
+					joinGweui = gw.EUI;
+					try 
+					{						
+					  state = "join";
+					} 
+					catch (Exception e) 
+					{
+					  System.out.println("deveui does not exist in Session table");
+					}		
 				}
 			
 				
@@ -373,36 +484,83 @@ public class GWMP
 					ByteBuffer b = ByteBuffer.allocate(16);
 			        b.order(ByteOrder.LITTLE_ENDIAN);
 			        b.put((byte)0x02);
-			        b.put(joinAccept.getAppNonce());
-			        b.put(joinAccept.getNetId());
-			        b.put(joinRequest.getDevNonce());
 			        
-			        byte[] key = encrypt(b, appKey);
-			        
-			        a.put((byte) 0x01);
-			        a.put(new byte[]{0x00, 0x00, 0x00, 0x00});
-			        a.put((byte)0x00);//direction - uplink
-			        a.put(data[1]); //devaddr[4]
-			        a.put(data[2]);
-			        a.put(data[3]);
-			        a.put(data[4]);
-			        a.put((byte)0x00);//fcnt[4]
-			        a.put((byte)0x00);
-			        a.put(data[6]);
-			        a.put(data[7]);        
-			        a.put((byte) 0x00);
-			        a.put((byte) 0x01);
-			        
-			        byte[] s = encrypt(a, key);
-			        
-			        byte[] payload = new byte[16];
-			        System.arraycopy(data, 9, payload, 0, 7);
-			        
-			        for (int i = 0; i < 7; i++) 
+			        byte[] deveui;
+			      
+			        try 
+					{	
+			    		@SuppressWarnings("deprecation")
+			    		SessionFactory sf = cfg.buildSessionFactory();
+			    		hSession = sf.openSession();
+			        	hSession.beginTransaction();
+			        	
+			        	session = (Session)hSession.createCriteria(Session.class).add(Restrictions.eq("devAddr", new byte[]{data[1], data[2], data[3], data[4]})).uniqueResult(); 	
+			        	deveui = session.getDeveui();
+			        	b.put(session.getAppNonce());
+				        b.put(netId);
+				        b.put(session.getDevNonce());
+				        
+				        hSession.flush();
+			        	hSession.close();
+				        
+				        /*b.put(joinAccept.getAppNonce());
+				        b.put(joinAccept.getNetId());
+				        b.put(joinRequest.getDevNonce());*/
+				        
+				        byte[] key = encrypt(b, appKey);
+				        
+				        a.put((byte) 0x01);
+				        a.put(new byte[]{0x00, 0x00, 0x00, 0x00});
+				        a.put((byte)0x00);//direction - uplink
+				        a.put(data[1]); //devaddr[4]
+				        a.put(data[2]);
+				        a.put(data[3]);
+				        a.put(data[4]);
+				        a.put((byte)0x00);//fcnt[4]
+				        a.put((byte)0x00);
+				        a.put(data[6]);
+				        a.put(data[7]);        
+				        a.put((byte) 0x00);
+				        a.put((byte) 0x01);
+				        
+				        byte[] s = encrypt(a, key);
+				        
+				        byte[] payload = new byte[16];
+				        System.arraycopy(data, 9, payload, 0, 7);
+				        
+				        for (int i = 0; i < 7; i++) 
+				        {
+				            payload[i] = (byte) (s[i] ^ payload[i]);
+				        }
+				        System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(payload));
+				        
+				        try 
+						{
+				        
+				    		hSession = sf.openSession();
+				         hSession.beginTransaction();
+				         
+						  Upstream upstream = new Upstream();
+						  upstream.setDeveui(deveui);
+						  upstream.setGweui(gw.EUI);
+						  upstream.setRxpk(tempStr);
+						  upstream.setData(payload);
+						  
+						  hSession.save(upstream);
+						  hSession.flush();
+						  hSession.getTransaction().commit();
+						  hSession.close();
+						} 
+						catch (Exception e) 
+						{
+							e.printStackTrace();
+						  //System.out.println("gweui does not exist in Upstream table");
+						}
+					}
+			        catch(Exception e)
 			        {
-			            payload[i] = (byte) (s[i] ^ payload[i]);
-			        }
-			        System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(payload));
+			        	System.out.println("devAddr does not exist in Session table");
+			        }	
 				}
 			}
 			catch(Exception e)
@@ -411,84 +569,23 @@ public class GWMP
 			}
 		}
     }
-	    
-	    /*public ByteBuffer pullResp(byte MType, Packet packet)
-	    {      
-	    	ByteBuffer pkt;
-	    	pkt = ByteBuffer.allocate(1024);
-	        pkt.order(ByteOrder.LITTLE_ENDIAN);
-	        pkt.put((byte)version);
-	        pkt.put((byte)token[0]);
-	        pkt.put((byte)token[1]);
-	        pkt.put((byte)PULL_RESP);
-	        
-	        if(MType == PHYPayload.MHDR.MType.UNCONF_DATA_DOWN)
-	        {
-        		ByteBuffer dataUnencrypted;
-    	    	dataUnencrypted = ByteBuffer.allocate(1024);
-    	        dataUnencrypted.order(ByteOrder.LITTLE_ENDIAN);
-    	        
-    	        ByteBuffer tmp; 
-    	        
-    	        String data = null;
-    	        
-    			dataUnencrypted.put(JoinAccept.devAddr);
-    			dataUnencrypted.put("11111111111111".getBytes()); //test
-    			
-    			tmp = ByteBuffer.allocate(19);
-    			tmp.put(PHYPayload.MHDR.MType.UNCONF_DATA_DOWN);
-    			tmp.put(dataUnencrypted);
-    			
-    			data = new String(tmp.array());
-    			
-    	        txpk.setCodr(rxpk.getCodr());
-    	        txpk.setTmst(rxpk.getTmst() + 5000000);
-    	        txpk.setRfch(0);
-    	        txpk.setFreq(rxpk.getFreq());
-    	        txpk.setModu("LORA");
-    	        txpk.setDatr(rxpk.getDatr());
-    	        txpk.setCodr(rxpk.getCodr());
-    	        txpk.setIpol(true);
-    	        txpk.setPowe(14);
-    	        txpk.setImme(false);
-    	        txpk.setSize(data.length());
-    	        txpk.setData(data);    
-    	        
-    	        JSONObject t = new JSONObject();
-    	        t = txpk.toJSON();
-    	        
-    	        String t_str = null;
-    	        try 
-    	        {
-    				t_str = new JSONObject().put("txpk", t).toString();
-    			} 
-    	        catch (Exception e) 
-    	        {
-    				e.printStackTrace();
-    			}
-    	        
-    	        pkt.put(t_str.getBytes());
-	        }
-	                     
-	        return pkt;
-	    }*/
 	
 	public void test() throws Exception
 	{
 		//encryption before mic
 		
-		String d = "QBd3lgYAAAAK+YnS6LlYvzTN2k4="; 
+		/*String d = "QBd3lgYAAAAK+YnS6LlYvzTN2k4="; 
 		byte[] data = Base64.getDecoder().decode(d);
 		byte[] appNonce = new byte[]{(byte)0x59, (byte)0x2D, (byte)0x92};
 		byte[] netId = new byte[]{0x03, 0x02, 0x01};
 		byte[] devNonce = new byte[]{0x61, 0x5C};
 		
         ByteBuffer a = ByteBuffer.allocate(16);
-        a.order(ByteOrder.LITTLE_ENDIAN);
+        a.order(ByteOrder.LITTLE_ENDIAN);*/
 		
         //NwkSKey: key = aes128 encrypt(AppKey, 0x01 + AppNonce + NetID + DevNonce + pad16) - think not used
         //AppSKey: aes128 encrypt(AppKey, 0x02 + AppNonce + NetID + DevNonce + pad16) 
-		ByteBuffer b = ByteBuffer.allocate(16);
+		/*ByteBuffer b = ByteBuffer.allocate(16);
         b.order(ByteOrder.LITTLE_ENDIAN);
         b.put((byte)0x02);
         b.put(appNonce);
@@ -520,8 +617,27 @@ public class GWMP
         {
             payload[j] = (byte) (s[j] ^ payload[j]);
         }
-        System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(payload));
+        System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(payload));*/
 		
+		/*Configuration cfg = new Configuration();
+		cfg.configure("Hibernate.cfg.xml");
+		
+		@SuppressWarnings("deprecation")
+		SessionFactory sf = cfg.buildSessionFactory();
+		org.hibernate.Session session = sf.openSession();
+		Session s = null;
+		
+		try {
+		  s = (Session) session.load(Session.class, new byte[]{0x00,0x04,(byte)0xa3,0x0b, 0x00, 0x1a, 0x40, 0x6d});
+		} catch (Exception e) {
+		  // No Users with id 'userId' exists
+		}
+		System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(s.getDevAddr()));*/
+		/*session = (Session)hSession.createCriteria(Session.class).add(Restrictions.eq("devAddr", new byte[]{0x6d, 0x40, 0x1a, 0x00})).uniqueResult(); 
+		System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(session.getAppNonce()));*/
+		
+		 /*Upstream upstream = (Upstream) hSession.load(Upstream.class, new byte[]{(byte)0xAA, 0x55, 0x5A, 0x00, 0x00, 0x00, 0x00, 0x00});
+		 System.out.println(javax.xml.bind.DatatypeConverter.printHexBinary(upstream.getGweui()));*/
 	}
 	
     
